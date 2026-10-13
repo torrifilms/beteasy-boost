@@ -1,0 +1,13 @@
+[project]
+name = "eb-predictions"
+version = "1.0.0"
+description = "Ежедневные прогнозы BETEASY: линия, самый вероятный исход, текст и публикация в WordPress."
+requires-python = ">=3.11"
+dependencies = ["httpx>=0.27"]
+
+[project.scripts]
+eb-predictions = "eb_predictions.__main__:main"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
