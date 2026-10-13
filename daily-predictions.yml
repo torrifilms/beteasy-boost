@@ -1,0 +1,35 @@
+name: Daily predictions
+
+on:
+  schedule:
+    # 06:00 UTC = 09:00 МСК
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install -e automation/predictions
+      - name: Test the line math
+        working-directory: automation/predictions
+        run: python -m unittest discover -s tests
+        env:
+          PYTHONPATH: src
+      - name: Build and publish predictions
+        run: python -m eb_predictions
+        env:
+          WP_BASE_URL: https://beteasy.ru
+          WP_USERNAME: ${{ secrets.WP_USERNAME }}
+          WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
+          WP_POST_STATUS: publish
+          WP_BOOKMAKER_ID: ${{ secrets.WP_BOOKMAKER_ID }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL || 'https://api.x.ai/v1' }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL || 'grok-4.7' }}
+          MAX_MATCHES: "12"
