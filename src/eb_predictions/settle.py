@@ -1,4 +1,4 @@
-"""Расчёт прошедших прогнозов с автоматическим созданием новостей."""
+"""Расчёт прошедших прогнозов с новостями в стиле Telegram."""
 
 from __future__ import annotations
 
@@ -9,16 +9,33 @@ def _create_news(client: httpx.Client, wp_url: str, auth: tuple, prediction: dic
     acf = prediction.get("acf") or {}
     team1 = acf.get("pr_team1") or "Команда 1"
     team2 = acf.get("pr_team2") or "Команда 2"
+    bet = acf.get("bet_type") or "прогноз"
+    odds = acf.get("odds") or ""
     link = prediction.get("link", "")
-    status_ru = "зашёл" if result == "won" else "не зашёл"
 
-    title = f"Прогноз на {team1} — {team2} {status_ru}"
+    if result == "won":
+        emoji = "✅"
+        status_ru = "зашёл"
+        comment = "Отлично сработало."
+    else:
+        emoji = "❌"
+        status_ru = "не зашёл"
+        comment = "В этот раз мимо."
+
+    title = f"{emoji} {team1} — {team2}: прогноз {status_ru}"
+
     content = (
-        f"<p>Матч <strong>{team1} — {team2}</strong> завершился со счётом <strong>{score}</strong>.</p>"
-        f"<p>Прогноз <strong>{status_ru}</strong>.</p>"
+        f"<p>{emoji} <strong>{team1} — {team2}</strong></p>"
+        f"<p>Счёт: <strong>{score}</strong></p>"
+        f"<p>Прогноз: {bet}"
     )
+    if odds:
+        content += f" за {odds}"
+    content += f" — <strong>{status_ru}</strong>.</p>"
+    content += f"<p>{comment}</p>"
+
     if link:
-        content += f'<p><a href="{link}">Смотреть прогноз</a></p>'
+        content += f'<p><a href="{link}">👉 Смотреть прогноз</a></p>'
 
     try:
         r = client.post(
@@ -28,12 +45,11 @@ def _create_news(client: httpx.Client, wp_url: str, auth: tuple, prediction: dic
                 "title": title,
                 "content": content,
                 "status": "publish",
-                "categories": [],  # можно указать ID категории новостей
             },
             timeout=30,
         )
         if r.status_code in (200, 201):
-            print(f"  Новость создана: {title}")
+            print(f"  Новость: {title}")
         else:
             print(f"  Не удалось создать новость: {r.status_code}")
     except Exception as exc:
