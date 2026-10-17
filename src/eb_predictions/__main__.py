@@ -25,6 +25,19 @@ def map_risk(raw: str) -> str:
     return "Средний"
 
 
+def map_sport(raw: str) -> str:
+    r = (raw or "").lower()
+    if "football" in r or "футбол" in r or "soccer" in r:
+        return "футбол"
+    if "hockey" in r or "хоккей" in r:
+        return "хоккей"
+    if "tennis" in r or "теннис" in r:
+        return "теннис"
+    if "basket" in r or "баскет" in r:
+        return "баскетбол"
+    return "футбол"
+
+
 def main() -> None:
     wp_url = os.environ.get("WP_BASE_URL", "https://beteasy.ru").rstrip("/")
     wp_user = os.environ.get("WP_USERNAME")
@@ -81,7 +94,7 @@ def main() -> None:
             "prediction_status": "pending",
             "final_score": "",
             "pr_is_top": False,
-            "sport": "football",
+            "sport": map_sport(getattr(pick, "sport", "football")),
         }
 
         title = f"{pick.team1} — {pick.team2}: прогноз"
