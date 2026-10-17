@@ -1,4 +1,4 @@
-"""Точка входа: расчёт прошедших прогнозов + публикация новых."""
+"""Точка входа: расчёт прошедших прогнозов + публикация новых в тип prediction."""
 
 from __future__ import annotations
 
@@ -15,27 +15,6 @@ from .writer import write_posts, OpenAIText
 from .settle import settle_past_predictions, update_statistics
 
 MSK = ZoneInfo("Europe/Moscow")
-
-
-def get_predictions_category_id(client: httpx.Client, wp_url: str, auth: tuple[str, str]) -> int | None:
-    """Ищет ID категории «Прогнозы» или похожей."""
-    try:
-        resp = client.get(
-            f"{wp_url}/wp-json/wp/v2/categories",
-            params={"per_page": 100, "search": "прогноз"},
-            auth=auth,
-            timeout=30,
-        )
-        resp.raise_for_status()
-        for cat in resp.json():
-            name = (cat.get("name") or "").lower()
-            slug = (cat.get("slug") or "").lower()
-            if any(k in name or k in slug for k in ("прогноз", "prognoz", "forecast", "tips")):
-                print(f"Найдена категория: {cat.get('name')} (ID {cat.get('id')})")
-                return cat.get("id")
-    except Exception as exc:
-        print(f"Не удалось получить категории: {exc}")
-    return None
 
 
 def main() -> None:
@@ -63,8 +42,6 @@ def main() -> None:
         print("Нет подходящих матчей для публикации.")
         return
 
-    cat_id = get_predictions_category_id(client, wp_url, auth)
-
     llm_key = os.getenv("LLM_API_KEY")
     text_client = None
     if llm_key:
@@ -82,33 +59,35 @@ def main() -> None:
         html = texts.get(pick.match_key, "")
         if not html:
             continue
-        # Добавляем структурированные данные для последующего расчёта
-        meta_comment = (
-            f"<!-- BETEASY_META {json.dumps({
-                'match_key': pick.match_key,
-                'team1': pick.team1,
-                'team2': pick.team2,
-                'bet': pick.bet_type,
-                'odds': pick.odds,
-                'kickoff': pick.kickoff.isoformat(),
-                'sport': pick.sport,
-                'league': pick.league,
-            }, ensure_ascii=False)} -->"
-        )
-        full_html = meta_comment + html
 
-        title = f"{pick.team1} — {pick.team2}: {pick.bet_type}"
-        payload: dict = {
-            "title": title,
-            "content": full_html,
-            "status": os.getenv("WP_POST_STATUS", "publish"),
+        # Мета-поля в формате, который ждёт тема
+        meta = {
+            "pr_team1": pick.team1,
+            "pr_team2": pick.team2,
+            "league": pick.league or "",
+            "match_datetime": pick.kickoff.strftime("%d.%m.%Y %H:%M") if hasattr(pick, "kickoff") else "",
+            "bet_type": pick.bet_type,
+            "odds": str(pick.odds),
+            "stake": "50",
+            "risk": getattr(pick, "risk", "средний"),
+            "bank": getattr(pick, "bank", "2"),
+            "prediction_status": "pending",
+            "final_score": "",
+            "pr_is_top": "0",
         }
-        if cat_id:
-            payload["categories"] = [cat_id]
+
+        title = f"{pick.team1} — {pick.team2}: прогноз"
+        payload = {
+            "title": title,
+            "content": html,
+            "status": os.getenv("WP_POST_STATUS", "publish"),
+            "meta": meta,
+        }
 
         try:
+            # Кастомный тип записи prediction
             resp = client.post(
-                f"{wp_url}/wp-json/wp/v2/posts",
+                f"{wp_url}/wp-json/wp/v2/prediction",
                 auth=auth,
                 json=payload,
                 timeout=30,
@@ -117,7 +96,7 @@ def main() -> None:
                 published += 1
                 print(f"Опубликован: {title}")
             else:
-                print(f"Ошибка публикации {title}: {resp.status_code} {resp.text[:300]}")
+                print(f"Ошибка публикации {title}: {resp.status_code} {resp.text[:400]}")
         except Exception as exc:
             print(f"Исключение при публикации: {exc}")
 
