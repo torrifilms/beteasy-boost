@@ -1,4 +1,4 @@
-"""Расчёт прошедших прогнозов с SEO-новостями."""
+"""Расчёт прошедших прогнозов с читаемыми SEO-новостями и картинками."""
 
 from __future__ import annotations
 
@@ -18,17 +18,30 @@ def _get_related_links(client: httpx.Client, wp_url: str, auth: tuple, exclude_i
         if not posts:
             return ""
         sample = random.sample(posts, min(limit, len(posts)))
-        links = []
+        items = []
         for p in sample:
             title = p.get("title", {}).get("rendered", "")
             link = p.get("link", "")
             if title and link:
-                links.append(f'<a href="{link}">{title}</a>')
-        if links:
-            return "<p><strong>Смотрите также:</strong> " + ", ".join(links) + ".</p>"
+                items.append(f'<li><a href="{link}">{title}</a></li>')
+        if items:
+            return "<h3>Смотрите также</h3><ul>" + "".join(items) + "</ul>"
     except Exception:
         pass
     return ""
+
+
+def _get_featured_image(client: httpx.Client, wp_url: str, auth: tuple, post_id: int) -> int | None:
+    try:
+        resp = client.get(
+            f"{wp_url}/wp-json/wp/v2/prediction/{post_id}",
+            auth=auth,
+            timeout=15,
+        )
+        media_id = resp.json().get("featured_media")
+        return media_id if media_id else None
+    except Exception:
+        return None
 
 
 def _create_news(client: httpx.Client, wp_url: str, auth: tuple, prediction: dict, result: str, score: str) -> None:
@@ -42,41 +55,49 @@ def _create_news(client: httpx.Client, wp_url: str, auth: tuple, prediction: dic
     pred_id = prediction.get("id")
 
     status_ru = "зашёл" if result == "won" else "не зашёл"
-    title = f"{team1} — {team2}: прогноз {status_ru}, счёт {score}"
+    title = f"{team1} — {team2}: итоги прогноза ({score})"
 
     content = f"""<p>Матч <strong>{team1} — {team2}</strong>"""
     if league:
-        content += f" в рамках {league}"
-    content += f" завершился со счётом <strong>{score}</strong>.</p>"
+        content += f" ({league})"
+    content += f" завершился. Итоговый счёт — <strong>{score}</strong>.</p>"
 
-    content += f"<p>Наш прогноз на этот матч — <strong>{bet}</strong>"
+    content += "<h2>Результат прогноза</h2>"
+    content += f"<p>Наш прогноз: <strong>{bet}</strong>"
     if odds:
-        content += f" с коэффициентом {odds}"
-    content += f" — <strong>{status_ru}</strong>.</p>"
+        content += f" (коэффициент {odds})"
+    content += f".</p>"
+    content += f"<p>Статус: <strong>{status_ru.upper()}</strong>.</p>"
 
     if result == "won":
-        content += "<p>Ставка сыграла. Подобный разбор матча и логику прогноза можно посмотреть в оригинальной записи.</p>"
+        content += "<p>Прогноз сыграл. Подробный разбор и логика выбора ставки доступны в оригинальном материале.</p>"
     else:
-        content += "<p>В этот раз прогноз не сыграл. Разбор и причины выбора ставки доступны в оригинальном материале.</p>"
+        content += "<p>Прогноз не сыграл. Разбор матча и причины выбора можно посмотреть в полной версии прогноза.</p>"
 
     if pred_link:
-        content += f'<p><a href="{pred_link}">Читать полный прогноз на {team1} — {team2}</a></p>'
+        content += f'<p><a href="{pred_link}"><strong>Открыть полный прогноз на {team1} — {team2}</strong></a></p>'
 
     related = _get_related_links(client, wp_url, auth, pred_id or 0)
     if related:
         content += related
 
-    content += "<p>18+. Прогнозы носят информационный характер и не являются гарантией выигрыша.</p>"
+    content += "<hr><p><small>18+. Прогнозы носят информационный характер и не являются гарантией выигрыша.</small></p>"
+
+    featured = _get_featured_image(client, wp_url, auth, pred_id) if pred_id else None
+
+    payload = {
+        "title": title,
+        "content": content,
+        "status": "publish",
+    }
+    if featured:
+        payload["featured_media"] = featured
 
     try:
         r = client.post(
             f"{wp_url}/wp-json/wp/v2/posts",
             auth=auth,
-            json={
-                "title": title,
-                "content": content,
-                "status": "publish",
-            },
+            json=payload,
             timeout=30,
         )
         if r.status_code in (200, 201):
