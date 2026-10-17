@@ -1,8 +1,9 @@
-"""Текст прогноза. Исход уже выбран моделью, модель его не меняет."""
+"""Текст прогноза с внутренними перелинковками на другие прогнозы."""
 
 from __future__ import annotations
 
 import json
+import random
 import sys
 from typing import Protocol
 
@@ -57,19 +58,36 @@ class OpenAIText:
         return str(payload["choices"][0]["message"]["content"])
 
 
-def fallback_html(pick: PlannedPick) -> str:
+def _internal_links(other_posts: list[dict]) -> str:
+    if not other_posts:
+        return ""
+    sample = random.sample(other_posts, min(3, len(other_posts)))
+    links = []
+    for p in sample:
+        title = p.get("title", "")
+        url = p.get("link", "")
+        if title and url:
+            links.append(f'<a href="{url}">{title}</a>')
+    if not links:
+        return ""
+    return "<p><strong>Смотрите также:</strong> " + ", ".join(links) + ".</p>"
+
+
+def fallback_html(pick: PlannedPick, other_posts: list[dict] | None = None) -> str:
     percent = round(pick.probability * 100)
+    links = _internal_links(other_posts or [])
     return (
         f"<p>{pick.league}: {pick.team1} против {pick.team2}, начало {pick.match_datetime} МСК.</p>"
         f"<p>Самый вероятный исход по линии — <strong>{pick.bet_type}</strong> "
         f"за {pick.odds:.2f}. После снятия маржи у этого варианта около {percent}%.</p>"
         f"<p>Шанс первой команды на победу в паре команд — {pick.stake}%. "
         f"Доля банка для такой уверенности — {pick.bank}%.</p>"
+        f"{links}"
         f"{DISCLAIMER}"
     )
 
 
-def _prompt(picks: list[PlannedPick]) -> str:
+def _prompt(picks: list[PlannedPick], other_posts: list[dict] | None) -> str:
     rows = [
         {
             "match_key": pick.match_key,
@@ -83,9 +101,16 @@ def _prompt(picks: list[PlannedPick]) -> str:
         }
         for pick in picks
     ]
+    links_hint = ""
+    if other_posts:
+        sample = random.sample(other_posts, min(3, len(other_posts)))
+        links_hint = " В конце добавь абзац <p><strong>Смотрите также:</strong> " + ", ".join(
+            f'<a href="{p["link"]}">{p["title"]}</a>' for p in sample if p.get("link")
+        ) + ".</p>"
     return (
-        "Для каждого матча напиши разбор на 3–5 абзацев в HTML (только теги p, strong, ul, li). "
-        "Ставку, коэффициент и процент не меняй. Верни JSON {\"items\":[{\"match_key\":\"...\",\"html\":\"...\"}]}.\n"
+        "Для каждого матча напиши разбор на 3–5 абзацев в HTML (только теги p, strong, ul, li, a). "
+        "Ставку, коэффициент и процент не меняй. " + links_hint +
+        " Верни JSON {\"items\":[{\"match_key\":\"...\",\"html\":\"...\"}]}.\n"
         + json.dumps(rows, ensure_ascii=False)
     )
 
@@ -100,12 +125,12 @@ def _loads(raw: str) -> object:
     return json.loads(text)
 
 
-def write_posts(picks: list[PlannedPick], client: TextClient | None) -> dict[str, str]:
-    texts = {pick.match_key: fallback_html(pick) for pick in picks}
+def write_posts(picks: list[PlannedPick], client: TextClient | None, other_posts: list[dict] | None = None) -> dict[str, str]:
+    texts = {pick.match_key: fallback_html(pick, other_posts) for pick in picks}
     if client is None or not picks:
         return texts
     try:
-        raw = client.complete(_prompt(picks))
+        raw = client.complete(_prompt(picks, other_posts))
         parsed = _loads(raw)
         items = parsed.get("items") if isinstance(parsed, dict) else None
         if not isinstance(items, list):
