@@ -1,41 +1,72 @@
-"""Расчёт прошедших прогнозов с новостями в стиле Telegram."""
+"""Расчёт прошедших прогнозов с SEO-новостями."""
 
 from __future__ import annotations
 
 import httpx
+import random
+
+
+def _get_related_links(client: httpx.Client, wp_url: str, auth: tuple, exclude_id: int, limit: int = 3) -> str:
+    try:
+        resp = client.get(
+            f"{wp_url}/wp-json/wp/v2/prediction",
+            params={"per_page": 20, "status": "publish", "orderby": "date", "order": "desc"},
+            auth=auth,
+            timeout=20,
+        )
+        posts = [p for p in resp.json() if p["id"] != exclude_id]
+        if not posts:
+            return ""
+        sample = random.sample(posts, min(limit, len(posts)))
+        links = []
+        for p in sample:
+            title = p.get("title", {}).get("rendered", "")
+            link = p.get("link", "")
+            if title and link:
+                links.append(f'<a href="{link}">{title}</a>')
+        if links:
+            return "<p><strong>Смотрите также:</strong> " + ", ".join(links) + ".</p>"
+    except Exception:
+        pass
+    return ""
 
 
 def _create_news(client: httpx.Client, wp_url: str, auth: tuple, prediction: dict, result: str, score: str) -> None:
     acf = prediction.get("acf") or {}
     team1 = acf.get("pr_team1") or "Команда 1"
     team2 = acf.get("pr_team2") or "Команда 2"
+    league = acf.get("league") or ""
     bet = acf.get("bet_type") or "прогноз"
     odds = acf.get("odds") or ""
-    link = prediction.get("link", "")
+    pred_link = prediction.get("link", "")
+    pred_id = prediction.get("id")
+
+    status_ru = "зашёл" if result == "won" else "не зашёл"
+    title = f"{team1} — {team2}: прогноз {status_ru}, счёт {score}"
+
+    content = f"""<p>Матч <strong>{team1} — {team2}</strong>"""
+    if league:
+        content += f" в рамках {league}"
+    content += f" завершился со счётом <strong>{score}</strong>.</p>"
+
+    content += f"<p>Наш прогноз на этот матч — <strong>{bet}</strong>"
+    if odds:
+        content += f" с коэффициентом {odds}"
+    content += f" — <strong>{status_ru}</strong>.</p>"
 
     if result == "won":
-        emoji = "✅"
-        status_ru = "зашёл"
-        comment = "Отлично сработало."
+        content += "<p>Ставка сыграла. Подобный разбор матча и логику прогноза можно посмотреть в оригинальной записи.</p>"
     else:
-        emoji = "❌"
-        status_ru = "не зашёл"
-        comment = "В этот раз мимо."
+        content += "<p>В этот раз прогноз не сыграл. Разбор и причины выбора ставки доступны в оригинальном материале.</p>"
 
-    title = f"{emoji} {team1} — {team2}: прогноз {status_ru}"
+    if pred_link:
+        content += f'<p><a href="{pred_link}">Читать полный прогноз на {team1} — {team2}</a></p>'
 
-    content = (
-        f"<p>{emoji} <strong>{team1} — {team2}</strong></p>"
-        f"<p>Счёт: <strong>{score}</strong></p>"
-        f"<p>Прогноз: {bet}"
-    )
-    if odds:
-        content += f" за {odds}"
-    content += f" — <strong>{status_ru}</strong>.</p>"
-    content += f"<p>{comment}</p>"
+    related = _get_related_links(client, wp_url, auth, pred_id or 0)
+    if related:
+        content += related
 
-    if link:
-        content += f'<p><a href="{link}">👉 Смотреть прогноз</a></p>'
+    content += "<p>18+. Прогнозы носят информационный характер и не являются гарантией выигрыша.</p>"
 
     try:
         r = client.post(
