@@ -16,6 +16,15 @@ from .settle import settle_past_predictions, update_statistics
 MSK = ZoneInfo("Europe/Moscow")
 
 
+def map_risk(raw: str) -> str:
+    r = (raw or "").lower()
+    if any(x in r for x in ("низк", "low", "никак")):
+        return "Никакой"
+    if any(x in r for x in ("высок", "high")):
+        return "Высокий"
+    return "Средний"
+
+
 def main() -> None:
     wp_url = os.environ.get("WP_BASE_URL", "https://beteasy.ru").rstrip("/")
     wp_user = os.environ.get("WP_USERNAME")
@@ -67,7 +76,7 @@ def main() -> None:
             "bet_type": pick.bet_type,
             "odds": str(pick.odds),
             "stake": 50,
-            "risk": getattr(pick, "risk", "средний"),
+            "risk": map_risk(getattr(pick, "risk", "средний")),
             "bank": getattr(pick, "bank", 2),
             "prediction_status": "pending",
             "final_score": "",
