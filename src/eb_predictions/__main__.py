@@ -1,4 +1,4 @@
-"""Точка входа: расчёт + публикация в prediction с ACF (русские названия, без дублей)."""
+"""Точка входа: расчёт + публикация в prediction с ACF (русские названия, без дублей, с перелинковкой)."""
 
 from __future__ import annotations
 
@@ -43,9 +43,9 @@ def format_match_datetime(dt: datetime) -> str:
     return dt.strftime("%d.%m в %H:%M")
 
 
-def get_existing_keys(client: httpx.Client, wp_url: str, auth: tuple) -> set[str]:
-    """Возвращает множество ключей «team1|team2|datetime» уже опубликованных прогнозов."""
+def get_existing_keys_and_posts(client: httpx.Client, wp_url: str, auth: tuple) -> tuple[set[str], list[dict]]:
     keys = set()
+    posts = []
     try:
         resp = client.get(
             f"{wp_url}/wp-json/wp/v2/prediction",
@@ -61,10 +61,14 @@ def get_existing_keys(client: httpx.Client, wp_url: str, auth: tuple) -> set[str
             dt = (acf.get("match_datetime") or "").strip()
             if t1 and t2 and dt:
                 keys.add(f"{t1}|{t2}|{dt}")
-                keys.add(f"{t2}|{t1}|{dt}")  # на всякий случай порядка
+                keys.add(f"{t2}|{t1}|{dt}")
+            title = post.get("title", {}).get("rendered", "")
+            link = post.get("link", "")
+            if title and link and not any(c.isascii() and c.isalpha() for c in title):
+                posts.append({"title": title, "link": link})
     except Exception as exc:
-        print(f"Не удалось получить существующие прогнозы для проверки дублей: {exc}")
-    return keys
+        print(f"Не удалось получить существующие прогнозы: {exc}")
+    return keys, posts
 
 
 def main() -> None:
@@ -85,9 +89,9 @@ def main() -> None:
     print("Обновляем статистику...")
     update_statistics(client, wp_url, auth)
 
-    print("Проверяем существующие прогнозы (защита от дублей)...")
-    existing = get_existing_keys(client, wp_url, auth)
-    print(f"Найдено существующих ключей: {len(existing)}")
+    print("Проверяем существующие прогнозы (защита от дублей + перелинковка)...")
+    existing, other_posts = get_existing_keys_and_posts(client, wp_url, auth)
+    print(f"Найдено существующих ключей: {len(existing)}, постов для ссылок: {len(other_posts)}")
 
     print("Собираем новые прогнозы на сегодня/завтра...")
     limit = int(os.getenv("MAX_MATCHES", "12"))
@@ -106,7 +110,7 @@ def main() -> None:
             client=client,
         )
 
-    texts = write_posts(picks, text_client)
+    texts = write_posts(picks, text_client, other_posts)
 
     published = 0
     skipped = 0
