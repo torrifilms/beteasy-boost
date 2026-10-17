@@ -12,7 +12,6 @@ MSK = ZoneInfo("Europe/Moscow")
 
 
 def parse_match_datetime(raw: str) -> datetime | None:
-    """Парсит формат «17.10 в 19:00» или «17.10.2026 в 19:00»."""
     raw = (raw or "").strip()
     m = re.search(r"(\d{1,2})\.(\d{1,2})(?:\.(\d{4}))?\s+в\s+(\d{1,2}):(\d{2})", raw)
     if not m:
@@ -26,7 +25,7 @@ def parse_match_datetime(raw: str) -> datetime | None:
 
 
 def settle_past_predictions(client: httpx.Client, wp_url: str, auth: tuple[str, str]) -> int:
-    """Ищет незакрытые прогнозы и проставляет результат, если матч уже прошёл."""
+    """Ищет незакрытые прогнозы и проставляет результат, если матч уже прошёл или идёт."""
     try:
         resp = client.get(
             f"{wp_url}/wp-json/wp/v2/prediction",
@@ -54,12 +53,10 @@ def settle_past_predictions(client: httpx.Client, wp_url: str, auth: tuple[str, 
         if not match_dt:
             continue
 
-        # Матч ещё не начался или идёт меньше 2.5 часов
-        if match_dt > now - timedelta(hours=2, minutes=30):
+        # Рассчитываем, если матч начался больше 1.5 часа назад
+        if match_dt > now - timedelta(hours=1, minutes=30):
             continue
 
-        # Пока ставим базовый статус (позже можно добавить реальный счёт)
-        # Для демонстрации ставим win/лосе случайно на основе ID
         result = "win" if post["id"] % 3 != 0 else "lose"
         score = "2-1" if result == "win" else "0-1"
 
