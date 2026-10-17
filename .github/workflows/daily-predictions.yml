@@ -2,8 +2,10 @@ name: Daily predictions
 
 on:
   schedule:
-    # 06:00 UTC = 09:00 МСК
+    # 06:00 UTC = 09:00 МСК — публикация на завтра
     - cron: "0 6 * * *"
+    # 20:00 UTC = 23:00 МСК — расчёт завершённых матчей
+    - cron: "0 20 * * *"
   workflow_dispatch:
 
 jobs:
