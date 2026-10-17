@@ -1,10 +1,9 @@
-"""Точка входа: расчёт прошедших прогнозов + публикация новых в тип prediction."""
+"""Точка входа: расчёт прошедших прогнозов + публикация новых в тип prediction (формат ACF)."""
 
 from __future__ import annotations
 
 import os
 import sys
-import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -60,20 +59,19 @@ def main() -> None:
         if not html:
             continue
 
-        # Мета-поля в формате, который ждёт тема
-        meta = {
+        acf_fields = {
             "pr_team1": pick.team1,
             "pr_team2": pick.team2,
             "league": pick.league or "",
             "match_datetime": pick.kickoff.strftime("%d.%m.%Y %H:%M") if hasattr(pick, "kickoff") else "",
             "bet_type": pick.bet_type,
             "odds": str(pick.odds),
-            "stake": "50",
+            "stake": 50,
             "risk": getattr(pick, "risk", "средний"),
-            "bank": getattr(pick, "bank", "2"),
+            "bank": getattr(pick, "bank", 2),
             "prediction_status": "pending",
             "final_score": "",
-            "pr_is_top": "0",
+            "pr_is_top": False,
         }
 
         title = f"{pick.team1} — {pick.team2}: прогноз"
@@ -81,11 +79,10 @@ def main() -> None:
             "title": title,
             "content": html,
             "status": os.getenv("WP_POST_STATUS", "publish"),
-            "meta": meta,
+            "acf": acf_fields,
         }
 
         try:
-            # Кастомный тип записи prediction
             resp = client.post(
                 f"{wp_url}/wp-json/wp/v2/prediction",
                 auth=auth,
