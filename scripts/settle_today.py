@@ -1,19 +1,41 @@
 #!/usr/bin/env python3
-"""Расчёт завершённых матчей 17.10.2026."""
+"""Расчёт только завершённых матчей."""
 
-import os, httpx
+import os, httpx, re
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
+MSK = ZoneInfo("Europe/Moscow")
 wp_url = os.environ.get("WP_BASE_URL", "https://beteasy.ru").rstrip("/")
 auth = (os.environ["WP_USERNAME"], os.environ["WP_APP_PASSWORD"])
 client = httpx.Client(timeout=60, auth=auth)
 
-# Реальные результаты
+# Реальные результаты завершённых матчей
 RESULTS = {
     ("манчестер сити", "ипсвич"): ("3-2", 3, 2),
     ("брентфорд", "ливерпуль"): ("1-2", 1, 2),
     ("фулхэм", "халл"): ("1-0", 1, 0),
     ("бетис", "барселона"): ("2-5", 2, 5),
 }
+
+def parse_datetime(dt_str):
+    m = re.search(r"(\d{1,2})\.(\d{1,2})\s*(?:в\s*)?(\d{1,2}):(\d{2})", dt_str or "")
+    if not m:
+        return None
+    try:
+        day, month, hour, minute = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
+        now = datetime.now(MSK)
+        return datetime(now.year, month, day, hour, minute, tzinfo=MSK)
+    except Exception:
+        return None
+
+def is_finished(dt_str):
+    """Матч считается завершённым, если прошло 2+ часа с начала."""
+    match_dt = parse_datetime(dt_str)
+    if not match_dt:
+        return False
+    now = datetime.now(MSK)
+    return match_dt < now - timedelta(hours=2)
 
 def evaluate(bet, home, away, team1, team2):
     bet_l = (bet or "").lower()
@@ -46,14 +68,18 @@ resp = client.get(
 posts = resp.json()
 
 settled = 0
+skipped = 0
 for p in posts:
     acf = p.get("acf") or {}
     dt = acf.get("match_datetime") or ""
     status = (acf.get("prediction_status") or "").lower()
 
-    if "17.10" not in dt:
-        continue
     if status in ("won", "lost", "win", "lose"):
+        continue
+
+    # Пропускаем незавершённые матчи
+    if not is_finished(dt):
+        skipped += 1
         continue
 
     team1 = (acf.get("pr_team1") or "").lower()
@@ -78,4 +104,4 @@ for p in posts:
         title = p.get("title", {}).get("rendered", "")[:40]
         print(f"Рассчитан: {title} → {result} ({score})")
 
-print(f"\nИтого рассчитано: {settled}")
+print(f"\nРассчитано: {settled}, пропущено (не завершены): {skipped}")
