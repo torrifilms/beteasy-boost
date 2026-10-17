@@ -1,4 +1,4 @@
-"""Точка входа: расчёт + публикация в prediction с ACF (русские названия)."""
+"""Точка входа: расчёт + публикация в prediction с ACF (русские названия, без дублей)."""
 
 from __future__ import annotations
 
@@ -43,6 +43,30 @@ def format_match_datetime(dt: datetime) -> str:
     return dt.strftime("%d.%m в %H:%M")
 
 
+def get_existing_keys(client: httpx.Client, wp_url: str, auth: tuple) -> set[str]:
+    """Возвращает множество ключей «team1|team2|datetime» уже опубликованных прогнозов."""
+    keys = set()
+    try:
+        resp = client.get(
+            f"{wp_url}/wp-json/wp/v2/prediction",
+            params={"per_page": 100, "status": "publish", "orderby": "date", "order": "desc"},
+            auth=auth,
+            timeout=30,
+        )
+        resp.raise_for_status()
+        for post in resp.json():
+            acf = post.get("acf") or {}
+            t1 = (acf.get("pr_team1") or "").strip()
+            t2 = (acf.get("pr_team2") or "").strip()
+            dt = (acf.get("match_datetime") or "").strip()
+            if t1 and t2 and dt:
+                keys.add(f"{t1}|{t2}|{dt}")
+                keys.add(f"{t2}|{t1}|{dt}")  # на всякий случай порядка
+    except Exception as exc:
+        print(f"Не удалось получить существующие прогнозы для проверки дублей: {exc}")
+    return keys
+
+
 def main() -> None:
     wp_url = os.environ.get("WP_BASE_URL", "https://beteasy.ru").rstrip("/")
     wp_user = os.environ.get("WP_USERNAME")
@@ -60,6 +84,10 @@ def main() -> None:
 
     print("Обновляем статистику...")
     update_statistics(client, wp_url, auth)
+
+    print("Проверяем существующие прогнозы (защита от дублей)...")
+    existing = get_existing_keys(client, wp_url, auth)
+    print(f"Найдено существующих ключей: {len(existing)}")
 
     print("Собираем новые прогнозы на сегодня/завтра...")
     limit = int(os.getenv("MAX_MATCHES", "12"))
@@ -81,6 +109,7 @@ def main() -> None:
     texts = write_posts(picks, text_client)
 
     published = 0
+    skipped = 0
     for pick in picks:
         html = texts.get(pick.match_key, "")
         if not html:
@@ -92,6 +121,12 @@ def main() -> None:
         kickoff_str = ""
         if hasattr(pick, "kickoff"):
             kickoff_str = format_match_datetime(pick.kickoff)
+
+        key = f"{team1_ru}|{team2_ru}|{kickoff_str}"
+        if key in existing:
+            skipped += 1
+            print(f"Пропуск (дубль): {team1_ru} — {team2_ru} ({kickoff_str})")
+            continue
 
         acf_fields = {
             "pr_team1": team1_ru,
@@ -126,13 +161,14 @@ def main() -> None:
             )
             if resp.status_code in (200, 201):
                 published += 1
+                existing.add(key)
                 print(f"Опубликован: {title} ({kickoff_str})")
             else:
                 print(f"Ошибка публикации {title}: {resp.status_code} {resp.text[:400]}")
         except Exception as exc:
             print(f"Исключение при публикации: {exc}")
 
-    print(f"Готово. Опубликовано новых прогнозов: {published}")
+    print(f"Готово. Опубликовано новых: {published}, пропущено дублей: {skipped}")
 
 
 if __name__ == "__main__":
