@@ -11,7 +11,6 @@ if not wp_url.startswith("http"):
     wp_url = "https://" + wp_url
 auth = (os.environ.get("WP_USERNAME", ""), os.environ.get("WP_APP_PASSWORD", ""))
 
-# Резервные результаты (если парсинг не сработал)
 FALLBACK_RESULTS = [
     {"home": "Manchester City", "away": "Ipswich", "score": "3-2", "home_score": 3, "away_score": 2, "source": "fallback"},
     {"home": "Brentford", "away": "Liverpool", "score": "1-2", "home_score": 1, "away_score": 2, "source": "fallback"},
@@ -43,38 +42,51 @@ def is_finished(dt_str):
         return False
     return match_dt < datetime.now(MSK) - timedelta(hours=2)
 
-def evaluate(bet, home, away, team1, team2):
+def evaluate(bet, home_score, away_score, team1, team2):
+    """Оценивает ставку. home_score — счёт team1, away_score — счёт team2."""
     bet_l = (bet or "").lower()
-    total = home + away
-    t1, t2 = team1.lower(), team2.lower()
+    total = home_score + away_score
+    t1 = normalize(team1)
+    t2 = normalize(team2)
+    bet_n = normalize(bet)
+
     if "тотал" in bet_l or "больше" in bet_l:
-        if "2.5" in bet_l:
+        if "2.5" in bet_l or "25" in bet_n:
             return "won" if total > 2.5 else "lost"
-        if "3.5" in bet_l:
+        if "3.5" in bet_l or "35" in bet_n:
             return "won" if total > 3.5 else "lost"
+        if "1.5" in bet_l or "15" in bet_n:
+            return "won" if total > 1.5 else "lost"
     if "меньше" in bet_l:
-        if "2.5" in bet_l:
+        if "2.5" in bet_l or "25" in bet_n:
             return "won" if total < 2.5 else "lost"
-        if "3.5" in bet_l:
+        if "3.5" in bet_l or "35" in bet_n:
             return "won" if total < 3.5 else "lost"
     if "победа" in bet_l:
-        if t1 in bet_l:
-            return "won" if home > away else "lost"
-        if t2 in bet_l:
-            return "won" if away > home else "lost"
+        # Ищем какая команда упомянута в ставке
+        if t1 and t1 in bet_n:
+            return "won" if home_score > away_score else "lost"
+        if t2 and t2 in bet_n:
+            return "won" if away_score > home_score else "lost"
+        # Fallback: если название команды есть в ставке
+        if team1.lower() in bet_l:
+            return "won" if home_score > away_score else "lost"
+        if team2.lower() in bet_l:
+            return "won" if away_score > home_score else "lost"
     return None
 
 def find_match(results, team1, team2):
+    """Возвращает (match_dict, swapped) где swapped=True если team1=авей."""
     n1, n2 = normalize(team1), normalize(team2)
     if not n1 or not n2:
-        return None
+        return None, False
     for r in results:
         h, a = normalize(r.get("home", "")), normalize(r.get("away", ""))
         if (n1 in h or h in n1) and (n2 in a or a in n2):
-            return r
+            return r, False
         if (n2 in h or h in n2) and (n1 in a or a in n1):
-            return r
-    return None
+            return r, True
+    return None, False
 
 def main():
     print(f"WP URL: {wp_url}")
@@ -108,11 +120,16 @@ def main():
             team2 = acf.get("pr_team2") or ""
             bet = acf.get("bet_type") or ""
 
-            match = find_match(results, team1, team2)
+            match, swapped = find_match(results, team1, team2)
             if not match:
                 continue
 
-            result = evaluate(bet, match["home_score"], match["away_score"], team1, team2)
+            if swapped:
+                h_score, a_score = match["away_score"], match["home_score"]
+            else:
+                h_score, a_score = match["home_score"], match["away_score"]
+
+            result = evaluate(bet, h_score, a_score, team1, team2)
             if not result:
                 continue
 
