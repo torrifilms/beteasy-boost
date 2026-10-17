@@ -1,0 +1,123 @@
+"""Текст прогноза. Исход уже выбран моделью, модель его не меняет."""
+
+from __future__ import annotations
+
+import json
+import sys
+from typing import Protocol
+
+import httpx
+
+from .matches import PlannedPick
+
+DISCLAIMER = (
+    "<p><strong>Это мнение модели, не гарантия выигрыша.</strong> "
+    "Самый вероятный исход посчитан по открытой линии на момент запуска. "
+    "У легального букмекера в России коэффициент может быть другим. 18+.</p>"
+)
+
+
+class TextClient(Protocol):
+    def complete(self, prompt: str) -> str: ...
+
+
+class OpenAIText:
+    def __init__(self, api_key: str, base_url: str, model: str, client: httpx.Client) -> None:
+        self.api_key = api_key
+        self.base_url = base_url.rstrip("/")
+        self.model = model
+        self.client = client
+
+    def complete(self, prompt: str) -> str:
+        body: dict = {
+            "model": self.model,
+            "temperature": 0.4,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "Ты редактор спортивных прогнозов. Пишешь по-русски, коротко и по делу. "
+                        "Не меняешь уже выбранную ставку и коэффициент. Не обещаешь выигрыш."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+        }
+        if "api.x.ai" in self.base_url:
+            body["reasoning_effort"] = "low"
+        response = self.client.post(
+            f"{self.base_url}/chat/completions",
+            headers={"Authorization": f"Bearer {self.api_key}"},
+            json=body,
+            timeout=180,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        return str(payload["choices"][0]["message"]["content"])
+
+
+def fallback_html(pick: PlannedPick) -> str:
+    percent = round(pick.probability * 100)
+    return (
+        f"<p>{pick.league}: {pick.team1} против {pick.team2}, начало {pick.match_datetime} МСК.</p>"
+        f"<p>Самый вероятный исход по линии — <strong>{pick.bet_type}</strong> "
+        f"за {pick.odds:.2f}. После снятия маржи у этого варианта около {percent}%.</p>"
+        f"<p>Шанс первой команды на победу в паре команд — {pick.stake}%. "
+        f"Доля банка для такой уверенности — {pick.bank}%.</p>"
+        f"{DISCLAIMER}"
+    )
+
+
+def _prompt(picks: list[PlannedPick]) -> str:
+    rows = [
+        {
+            "match_key": pick.match_key,
+            "league": pick.league,
+            "teams": f"{pick.team1} — {pick.team2}",
+            "start_msk": pick.match_datetime,
+            "bet": pick.bet_type,
+            "odds": pick.odds,
+            "probability_percent": round(pick.probability * 100),
+            "team1_win_percent": pick.stake,
+        }
+        for pick in picks
+    ]
+    return (
+        "Для каждого матча напиши разбор на 3–5 абзацев в HTML (только теги p, strong, ul, li). "
+        "Ставку, коэффициент и процент не меняй. Верни JSON {\"items\":[{\"match_key\":\"...\",\"html\":\"...\"}]}.\n"
+        + json.dumps(rows, ensure_ascii=False)
+    )
+
+
+def _loads(raw: str) -> object:
+    text = raw.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        text = "\n".join(lines)
+    return json.loads(text)
+
+
+def write_posts(picks: list[PlannedPick], client: TextClient | None) -> dict[str, str]:
+    texts = {pick.match_key: fallback_html(pick) for pick in picks}
+    if client is None or not picks:
+        return texts
+    try:
+        raw = client.complete(_prompt(picks))
+        parsed = _loads(raw)
+        items = parsed.get("items") if isinstance(parsed, dict) else None
+        if not isinstance(items, list):
+            return texts
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            key = str(item.get("match_key") or "")
+            html = str(item.get("html") or "").strip()
+            if key in texts and html:
+                texts[key] = html + DISCLAIMER
+    except (httpx.HTTPError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        print(f"Текст модели не получен, оставлен короткий разбор: {exc}", file=sys.stderr)
+        return texts
+    return texts
