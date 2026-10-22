@@ -153,6 +153,7 @@ def main() -> None:
             "title": title,
             "content": html,
             "status": os.getenv("WP_POST_STATUS", "publish"),
+            "slug": transliterate(title),
             "acf": acf_fields,
         }
 
@@ -173,6 +174,29 @@ def main() -> None:
             print(f"Исключение при публикации: {exc}")
 
     print(f"Готово. Опубликовано новых: {published}, пропущено дублей: {skipped}")
+
+
+
+def transliterate(text: str) -> str:
+    """Транслитерация для slug."""
+    if not text:
+        return "prediction"
+    table = {
+        "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e",
+        "ё": "yo", "ж": "zh", "з": "z", "и": "i", "й": "y", "к": "k",
+        "л": "l", "м": "m", "н": "n", "о": "o", "п": "p", "р": "r",
+        "с": "s", "т": "t", "у": "u", "ф": "f", "х": "kh", "ц": "ts",
+        "ч": "ch", "ш": "sh", "щ": "shch", "ъ": "", "ы": "y", "ь": "",
+        "э": "e", "ю": "yu", "я": "ya",
+    }
+    import re
+    result = []
+    for ch in text.lower():
+        result.append(table.get(ch, ch))
+    slug = "".join(result)
+    slug = re.sub(r"[^a-z0-9\-]", "-", slug)
+    slug = re.sub(r"-+", "-", slug).strip("-")
+    return slug or "prediction"
 
 
 if __name__ == "__main__":
