@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
-"""Расчёт прогнозов с реальными результатами с 17.10.2026."""
+"""Расчёт прогнозов с реальными результатами:
+- Футбол: API-Football (api-sports.io)
+- Киберспорт (CS2, Dota 2): PandaScore
+Ключи берутся из окружения: API_FOOTBALL_KEY, PANDASCORE_KEY
+"""
 
 import os, httpx, re, sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from zoneinfo import ZoneInfo
 
-# Импорт реальных результатов с 17.10
+# Fallback на случай, если API недоступны
 try:
     from results_from_1710 import RESULTS_FROM_1710
 except ImportError:
@@ -16,6 +20,9 @@ wp_url = os.environ.get("WP_BASE_URL", "https://beteasy.ru").rstrip("/")
 if not wp_url.startswith("http"):
     wp_url = "https://" + wp_url
 auth = (os.environ.get("WP_USERNAME", ""), os.environ.get("WP_APP_PASSWORD", ""))
+
+API_FOOTBALL_KEY = os.environ.get("API_FOOTBALL_KEY", "")
+PANDASCORE_KEY = os.environ.get("PANDASCORE_KEY", "")
 
 def normalize(name):
     return re.sub(r"[^a-z0-9а-яё]", "", (name or "").lower())
@@ -38,7 +45,6 @@ def is_finished(dt_str):
     return match_dt < datetime.now(MSK) - timedelta(hours=2)
 
 def evaluate(bet, home_score, away_score, team1, team2):
-    """Оценивает ставку. home_score — счёт team1, away_score — счёт team2."""
     bet_l = (bet or "").lower()
     total = home_score + away_score
     t1 = normalize(team1)
@@ -69,7 +75,6 @@ def evaluate(bet, home_score, away_score, team1, team2):
     return None
 
 def find_match(results, team1, team2):
-    """Возвращает (match_dict, swapped) где swapped=True если team1=авей."""
     n1, n2 = normalize(team1), normalize(team2)
     if not n1 or not n2:
         return None, False
@@ -81,10 +86,106 @@ def find_match(results, team1, team2):
             return r, True
     return None, False
 
+def fetch_api_football(client: httpx.Client, days: int = 7) -> list:
+    """Футбол: результаты за последние N дней."""
+    if not API_FOOTBALL_KEY:
+        print("API_FOOTBALL_KEY не задан — пропускаем футбол")
+        return []
+    results = []
+    headers = {"x-apisports-key": API_FOOTBALL_KEY}
+    today = date.today()
+    for i in range(days):
+        d = (today - timedelta(days=i)).isoformat()
+        try:
+            resp = client.get(
+                "https://v3.football.api-sports.io/fixtures",
+                params={"date": d, "status": "FT"},
+                headers=headers,
+                timeout=30,
+            )
+            data = resp.json()
+            for item in data.get("response", []):
+                teams = item.get("teams", {})
+                goals = item.get("goals", {})
+                home = teams.get("home", {}).get("name", "")
+                away = teams.get("away", {}).get("name", "")
+                hs, as_ = goals.get("home"), goals.get("away")
+                if home and away and hs is not None and as_ is not None:
+                    results.append({
+                        "home": home,
+                        "away": away,
+                        "score": f"{hs}-{as_}",
+                        "home_score": int(hs),
+                        "away_score": int(as_),
+                        "source": "api-football",
+                    })
+        except Exception as e:
+            print(f"API-Football {d}: {e}")
+    print(f"API-Football: {len(results)} результатов")
+    return results
+
+def fetch_pandascore(client: httpx.Client, game: str, days: int = 7) -> list:
+    """PandaScore: CS2 (csgo) или Dota 2."""
+    if not PANDASCORE_KEY:
+        print(f"PANDASCORE_KEY не задан — пропускаем {game}")
+        return []
+    results = []
+    # CS2 использует префикс /csgo/ в PandaScore
+    endpoint = f"https://api.pandascore.co/{game}/matches/past"
+    try:
+        resp = client.get(
+            endpoint,
+            params={"token": PANDASCORE_KEY, "per_page": 50, "sort": "-begin_at"},
+            timeout=30,
+        )
+        matches = resp.json()
+        cutoff = datetime.now(MSK) - timedelta(days=days)
+        for m in matches:
+            begin = m.get("begin_at") or ""
+            if begin:
+                try:
+                    dt = datetime.fromisoformat(begin.replace("Z", "+00:00"))
+                    if dt < cutoff:
+                        continue
+                except Exception:
+                    pass
+            opponents = m.get("opponents") or []
+            if len(opponents) < 2:
+                continue
+            home = opponents[0].get("opponent", {}).get("name", "")
+            away = opponents[1].get("opponent", {}).get("name", "")
+            results_data = m.get("results") or []
+            if len(results_data) >= 2:
+                hs = results_data[0].get("score", 0)
+                as_ = results_data[1].get("score", 0)
+                results.append({
+                    "home": home,
+                    "away": away,
+                    "score": f"{hs}-{as_}",
+                    "home_score": int(hs),
+                    "away_score": int(as_),
+                    "source": f"pandascore-{game}",
+                })
+    except Exception as e:
+        print(f"PandaScore {game}: {e}")
+    print(f"PandaScore {game}: {len(results)} результатов")
+    return results
+
 def main():
     print(f"WP URL: {wp_url}")
-    results = RESULTS_FROM_1710.copy()
-    print(f"Результатов в базе (с 17.10): {len(results)}")
+    results = []
+
+    with httpx.Client(timeout=60) as client:
+        results.extend(fetch_api_football(client, days=10))
+        results.extend(fetch_pandascore(client, "csgo", days=10))   # CS2
+        results.extend(fetch_pandascore(client, "dota2", days=10))
+
+    # Fallback, если API ничего не вернули
+    if not results:
+        print("API не вернули результатов — используем локальный список")
+        results = RESULTS_FROM_1710.copy()
+
+    print(f"Всего результатов для сверки: {len(results)}")
 
     with httpx.Client(timeout=60) as client:
         try:
