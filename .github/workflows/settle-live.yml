@@ -3,7 +3,8 @@ name: Settle live
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 */2 * * *'
+    # Каждый день в 10:00 по Москве (07:00 UTC)
+    - cron: '0 7 * * *'
 
 jobs:
   settle:
