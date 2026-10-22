@@ -1,26 +1,21 @@
 #!/usr/bin/env python3
-"""Расчёт прогнозов с парсингом Flashscore и cybersport.ru."""
+"""Расчёт прогнозов с реальными результатами с 17.10.2026."""
 
 import os, httpx, re, sys
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
+
+# Импорт реальных результатов с 17.10
+try:
+    from results_from_1710 import RESULTS_FROM_1710
+except ImportError:
+    RESULTS_FROM_1710 = []
 
 MSK = ZoneInfo("Europe/Moscow")
 wp_url = os.environ.get("WP_BASE_URL", "https://beteasy.ru").rstrip("/")
 if not wp_url.startswith("http"):
     wp_url = "https://" + wp_url
 auth = (os.environ.get("WP_USERNAME", ""), os.environ.get("WP_APP_PASSWORD", ""))
-
-FALLBACK_RESULTS = [
-    {"home": "Manchester City", "away": "Ipswich", "score": "3-2", "home_score": 3, "away_score": 2, "source": "fallback"},
-    {"home": "Brentford", "away": "Liverpool", "score": "1-2", "home_score": 1, "away_score": 2, "source": "fallback"},
-    {"home": "Fulham", "away": "Hull", "score": "1-0", "home_score": 1, "away_score": 0, "source": "fallback"},
-    {"home": "Betis", "away": "Barcelona", "score": "2-5", "home_score": 2, "away_score": 5, "source": "fallback"},
-    {"home": "Манчестер Сити", "away": "Ипсвич", "score": "3-2", "home_score": 3, "away_score": 2, "source": "fallback"},
-    {"home": "Брентфорд", "away": "Ливерпуль", "score": "1-2", "home_score": 1, "away_score": 2, "source": "fallback"},
-    {"home": "Фулхэм", "away": "Халл", "score": "1-0", "home_score": 1, "away_score": 0, "source": "fallback"},
-    {"home": "Бетис", "away": "Барселона", "score": "2-5", "home_score": 2, "away_score": 5, "source": "fallback"},
-]
 
 def normalize(name):
     return re.sub(r"[^a-z0-9а-яё]", "", (name or "").lower())
@@ -63,12 +58,10 @@ def evaluate(bet, home_score, away_score, team1, team2):
         if "3.5" in bet_l or "35" in bet_n:
             return "won" if total < 3.5 else "lost"
     if "победа" in bet_l:
-        # Ищем какая команда упомянута в ставке
         if t1 and t1 in bet_n:
             return "won" if home_score > away_score else "lost"
         if t2 and t2 in bet_n:
             return "won" if away_score > home_score else "lost"
-        # Fallback: если название команды есть в ставке
         if team1.lower() in bet_l:
             return "won" if home_score > away_score else "lost"
         if team2.lower() in bet_l:
@@ -90,14 +83,14 @@ def find_match(results, team1, team2):
 
 def main():
     print(f"WP URL: {wp_url}")
-    results = FALLBACK_RESULTS.copy()
-    print(f"Результатов в базе: {len(results)}")
+    results = RESULTS_FROM_1710.copy()
+    print(f"Результатов в базе (с 17.10): {len(results)}")
 
     with httpx.Client(timeout=60) as client:
         try:
             resp = client.get(
                 f"{wp_url}/wp-json/wp/v2/prediction",
-                params={"per_page": 50, "status": "publish"},
+                params={"per_page": 100, "status": "publish"},
                 auth=auth,
             )
             posts = resp.json()
@@ -106,10 +99,12 @@ def main():
             return
 
         settled = 0
+        skipped = 0
         for post in posts:
             acf = post.get("acf") or {}
             status = (acf.get("prediction_status") or "").lower()
             if status in ("won", "lost"):
+                skipped += 1
                 continue
 
             dt = acf.get("match_datetime") or ""
@@ -141,12 +136,12 @@ def main():
                 )
                 if update.status_code == 200:
                     settled += 1
-                    title = post.get("title", {}).get("rendered", "")[:40]
+                    title = post.get("title", {}).get("rendered", "")[:50]
                     print(f"Рассчитан: {title} → {result} ({match['score']})")
             except Exception as e:
                 print(f"Ошибка обновления: {e}")
 
-        print(f"\nИтого рассчитано: {settled}")
+        print(f"\nИтого рассчитано: {settled} | Уже было рассчитано: {skipped}")
 
 if __name__ == "__main__":
     main()
