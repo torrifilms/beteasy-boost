@@ -103,7 +103,13 @@ def fetch_api_football(client: httpx.Client, days: int = 7) -> list:
                 headers=headers,
                 timeout=30,
             )
+            if resp.status_code != 200:
+                print(f"API-Football {d}: HTTP {resp.status_code} {resp.text[:200]}")
+                continue
             data = resp.json()
+            if data.get("errors"):
+                print(f"API-Football {d}: errors {data['errors']}")
+                continue
             for item in data.get("response", []):
                 teams = item.get("teams", {})
                 goals = item.get("goals", {})
