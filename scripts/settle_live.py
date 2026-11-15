@@ -2,6 +2,7 @@
 """Расчёт прогнозов с реальными результатами:
 - Футбол: API-Football (api-sports.io)
 - Киберспорт (CS2, Dota 2): PandaScore
+- НХЛ / НБА: ESPN API (бесплатно)
 Ключи берутся из окружения: API_FOOTBALL_KEY, PANDASCORE_KEY
 """
 
@@ -58,6 +59,8 @@ def evaluate(bet, home_score, away_score, team1, team2):
             return "won" if total > 3.5 else "lost"
         if "1.5" in bet_l or "15" in bet_n:
             return "won" if total > 1.5 else "lost"
+        if "5.5" in bet_l or "55" in bet_n:
+            return "won" if total > 5.5 else "lost"
     if "меньше" in bet_l:
         if "2.5" in bet_l or "25" in bet_n:
             return "won" if total < 2.5 else "lost"
@@ -136,7 +139,6 @@ def fetch_pandascore(client: httpx.Client, game: str, days: int = 7) -> list:
         print(f"PANDASCORE_KEY не задан — пропускаем {game}")
         return []
     results = []
-    # CS2 использует префикс /csgo/ в PandaScore
     endpoint = f"https://api.pandascore.co/{game}/matches/past"
     try:
         resp = client.get(
@@ -177,16 +179,65 @@ def fetch_pandascore(client: httpx.Client, game: str, days: int = 7) -> list:
     print(f"PandaScore {game}: {len(results)} результатов")
     return results
 
+def fetch_espn_results(client: httpx.Client, sport: str, league: str, days: int = 10) -> list:
+    """ESPN: результаты NBA / NHL за последние N дней."""
+    results = []
+    today = date.today()
+    for i in range(days):
+        d = (today - timedelta(days=i)).strftime("%Y%m%d")
+        url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard"
+        try:
+            resp = client.get(url, params={"dates": d}, timeout=30)
+            if resp.status_code != 200:
+                continue
+            data = resp.json()
+            for event in data.get("events", []):
+                status = event.get("status", {}).get("type", {}).get("state", "")
+                if status != "post":
+                    continue
+                competitions = event.get("competitions") or []
+                if not competitions:
+                    continue
+                comp = competitions[0]
+                competitors = comp.get("competitors") or []
+                if len(competitors) < 2:
+                    continue
+                home = away = None
+                hs = as_ = None
+                for c in competitors:
+                    team = c.get("team", {}).get("displayName") or c.get("team", {}).get("name") or ""
+                    score = c.get("score")
+                    if c.get("homeAway") == "home":
+                        home = team
+                        hs = int(score) if score is not None else None
+                    else:
+                        away = team
+                        as_ = int(score) if score is not None else None
+                if home and away and hs is not None and as_ is not None:
+                    results.append({
+                        "home": home,
+                        "away": away,
+                        "score": f"{hs}-{as_}",
+                        "home_score": hs,
+                        "away_score": as_,
+                        "source": f"espn-{league}",
+                    })
+        except Exception as e:
+            print(f"ESPN {league} {d}: {e}")
+    print(f"ESPN {league}: {len(results)} результатов")
+    return results
+
 def main():
     print(f"WP URL: {wp_url}")
     results = []
 
     with httpx.Client(timeout=60) as client:
         results.extend(fetch_api_football(client, days=10))
-        results.extend(fetch_pandascore(client, "csgo", days=10))   # CS2
+        results.extend(fetch_pandascore(client, "csgo", days=10))
         results.extend(fetch_pandascore(client, "dota2", days=10))
+        results.extend(fetch_espn_results(client, "basketball", "nba", days=10))
+        results.extend(fetch_espn_results(client, "hockey", "nhl", days=10))
 
-    # Fallback, если API ничего не вернули
     if not results:
         print("API не вернули результатов — используем локальный список")
         results = RESULTS_FROM_1710.copy()
