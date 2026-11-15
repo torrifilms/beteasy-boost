@@ -21,6 +21,7 @@ LEAGUES: tuple[tuple[str, str, str, str], ...] = (
     ("football", "soccer", "fra.1", "Лига 1"),
     ("football", "soccer", "uefa.champions", "Лига чемпионов"),
     ("football", "soccer", "uefa.europa", "Лига Европы"),
+    ("football", "soccer", "uefa.nations", "Лига наций"),
     ("football", "soccer", "rus.1", "РПЛ"),
     ("hockey", "hockey", "nhl", "НХЛ"),
     ("basketball", "basketball", "nba", "НБА"),
